@@ -117,9 +117,59 @@
             font-size: 0.75em; /* Adjust the size of the icon */
         }
 
+        /* Auto-fullscreen / kiosk helpers */
+        #fs-gate {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: #000;
+            color: #fff;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1.25rem;
+            cursor: pointer;
+            text-align: center;
+            padding: 2rem;
+        }
+        #fs-gate.visible { display: flex; }
+        #fs-gate i { font-size: 3rem; opacity: 0.9; }
+        #fs-gate .fs-title { font-size: 1.5rem; font-weight: 600; }
+        #fs-gate .fs-hint { color: #aaa; font-size: 0.95rem; max-width: 28rem; }
+
+        /* When browser is in fullscreen, fill the viewport and hide chrome */
+        :fullscreen #container,
+        :-webkit-full-screen #container {
+            width: 100vw !important;
+            height: 100vh !important;
+            margin: 0;
+        }
+        body:fullscreen,
+        body:-webkit-full-screen {
+            margin: 0;
+        }
+        body.kiosk-mode #controls,
+        body.kiosk-mode #source {
+            display: none !important;
+        }
+        body.kiosk-mode #container {
+            width: 100vw;
+            height: 100vh;
+            margin: 0;
+        }
+        body.kiosk-mode {
+            margin: 0;
+        }
+
     </style>
 </head>
 <body>
+    <div id="fs-gate" aria-hidden="true">
+        <i class="fas fa-expand"></i>
+        <div class="fs-title">Tap or click to enter fullscreen</div>
+        <div class="fs-hint">Browsers require a click before fullscreen can start. This screen won’t appear again once you’re in fullscreen.</div>
+    </div>
     <a id="source" target="_blank"  class="external-link"></a>
     <div id="container">
         <img id="slideshow" src="" alt="Slideshow Image">
@@ -333,33 +383,91 @@ function initializeCastApi() {
             }
 
             toggleFullscreen() {
-                if (!document.fullscreenElement) {
-                    this.containerEl.requestFullscreen().catch(err => {
-                        console.error(`Error attempting to enable fullscreen mode: ${err.message} (${err.name})`);
-                    });
-                } else if (document.exitFullscreen) {
-                    document.exitFullscreen();
+                const target = document.documentElement;
+                if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                    const req = target.requestFullscreen || target.webkitRequestFullscreen;
+                    if (req) {
+                        Promise.resolve(req.call(target)).catch(err => {
+                            console.error(`Error attempting to enable fullscreen mode: ${err.message} (${err.name})`);
+                        });
+                    }
+                } else {
+                    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+                    if (exit) exit.call(document);
                 }
             }
             onFullscreenChange() {
-                if (document.fullscreenElement) {
-                    this.fullscreenToggleEl.innerHTML = '<i class="fas fa-compress"></i>'; // Change to compress icon when in fullscreen
+                const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+                if (inFs) {
+                    this.fullscreenToggleEl.innerHTML = '<i class="fas fa-compress"></i>';
+                    const gate = document.getElementById('fs-gate');
+                    if (gate) {
+                        gate.classList.remove('visible');
+                        gate.setAttribute('aria-hidden', 'true');
+                    }
                 } else {
-                    this.fullscreenToggleEl.innerHTML = '<i class="fas fa-expand"></i>'; // Change back to expand icon when not in fullscreen
+                    this.fullscreenToggleEl.innerHTML = '<i class="fas fa-expand"></i>';
                 }
             }
 
             onKeydown(event) {
-                if (event.key === "Escape" && document.fullscreenElement) {
-                    document.exitFullscreen();
+                if (event.key === "Escape" && (document.fullscreenElement || document.webkitFullscreenElement)) {
+                    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+                    if (exit) exit.call(document);
                 }
             }
 
 
         }
 
+        // URL params: ?fullscreen=1 | ?fs=1 | ?kiosk=1
+        // kiosk also hides controls for a clean TV/display view
+        const params = new URLSearchParams(window.location.search);
+        const wantFs = params.has('fullscreen') || params.get('fullscreen') === '1'
+            || params.has('fs') || params.get('fs') === '1'
+            || params.has('kiosk') || params.get('kiosk') === '1';
+        const wantKiosk = params.has('kiosk') || params.get('kiosk') === '1';
+        if (wantKiosk) {
+            document.body.classList.add('kiosk-mode');
+        }
+
         let ws = new WebSocket("ws://" + location.hostname + ":6789/");
         let slideshow = new Slideshow(ws);
+
+        // Global for the button's inline onclick
+        function toggleFullscreen() {
+            slideshow.toggleFullscreen();
+        }
+
+        function tryEnterFullscreen() {
+            const target = document.documentElement;
+            const req = target.requestFullscreen || target.webkitRequestFullscreen;
+            if (!req) return Promise.reject(new Error('Fullscreen API not available'));
+            return Promise.resolve(req.call(target));
+        }
+
+        if (wantFs) {
+            // Browsers usually block fullscreen without a user gesture.
+            // Try once on load; if it fails, show a full-screen click gate.
+            const gate = document.getElementById('fs-gate');
+            const armGate = () => {
+                if (!gate) return;
+                gate.classList.add('visible');
+                gate.setAttribute('aria-hidden', 'false');
+                const enter = () => {
+                    tryEnterFullscreen().then(() => {
+                        gate.classList.remove('visible');
+                        gate.setAttribute('aria-hidden', 'true');
+                    }).catch(() => { /* stay on gate */ });
+                };
+                gate.addEventListener('click', enter, { once: true });
+                gate.addEventListener('touchend', (e) => { e.preventDefault(); enter(); }, { once: true });
+            };
+            // slight delay so the first image can start loading
+            setTimeout(() => {
+                tryEnterFullscreen().catch(armGate);
+            }, 300);
+        }
     </script>
 
 </body>
