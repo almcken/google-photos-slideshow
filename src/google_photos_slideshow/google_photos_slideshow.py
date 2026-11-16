@@ -96,8 +96,16 @@ class Slideshow(ABC):
         args.cfg = cfg_path
         if cfg_path is not None and cfg_path.exists() and not args.fresh:
             logger.warning(f"Loading config from {cfg_path}")
-            loaded = yaml.safe_load(cfg_path.read_text()) or {}
+            try:
+                loaded = yaml.safe_load(cfg_path.read_text()) or {}
+            except Exception as e:
+                logger.warning(f"Config file is invalid ({e}); starting with defaults. Delete {cfg_path} to silence this.")
+                loaded = {}
+            if not isinstance(loaded, dict):
+                loaded = {}
             for k, v in loaded.items():
+                if k == 'cfg':
+                    continue
                 if isinstance(getattr(args, k, Default(None)), Default):
                     setattr(args, k, v)
         d = vars(args)
@@ -113,12 +121,21 @@ class Slideshow(ABC):
 
     @classmethod
     def save_cfg(cls, args, cfg=None):
-        a = args.copy()
+        a = {}
+        for k, v in args.items():
+            # Never persist internal/runtime keys or non-serializable objects
+            if k in ('cfg', 'fresh', 'info', 'debug'):
+                continue
+            if isinstance(v, Path):
+                v = str(v)
+            a[k] = v
         a['mode'] = cls.mode
         if cfg is not None:
-            logger.debug(f"Saving config to {cfg}")
-            with open(cfg, 'w') as f:
-                yaml.dump(a, f)
+            cfg_path = Path(cfg)
+            logger.debug(f"Saving config to {cfg_path}")
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cfg_path, 'w') as f:
+                yaml.safe_dump(a, f, default_flow_style=False)
 
     @classmethod
     def main(cls):
@@ -713,7 +730,14 @@ class GooglePhotosSlideshow(RegexSlideshow):
             cfg_path = Path(self._cfg_path) if self._cfg_path else default_cfg
             data = {}
             if cfg_path.exists():
-                data = yaml.safe_load(cfg_path.read_text()) or {}
+                try:
+                    data = yaml.safe_load(cfg_path.read_text()) or {}
+                except Exception:
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+            # Drop non-serializable / internal keys if they leaked in
+            data.pop('cfg', None)
             data['mode'] = self.mode
             data['albums'] = [
                 {'id': a['id'], 'url': a['url'], 'name': a['name'], 'enabled': a.get('enabled', True)}
@@ -724,7 +748,7 @@ class GooglePhotosSlideshow(RegexSlideshow):
                 data['url'] = self.albums[0]['url']
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             with open(cfg_path, 'w') as f:
-                yaml.dump(data, f, default_flow_style=False)
+                yaml.safe_dump(data, f, default_flow_style=False)
             logger.info(f"Saved {len(self.albums)} albums to {cfg_path}")
         except Exception as e:
             logger.warning(f"Failed to save config: {e}")
