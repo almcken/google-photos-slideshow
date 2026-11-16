@@ -91,10 +91,13 @@ class Slideshow(ABC):
     def get_args(cls):
         parser = cls.arg_parser()
         args = parser.parse_args()
-        if args.cfg is not None and args.cfg.exists() and not args.fresh:
-            logger.warning(f"Loading config from {args.cfg}")
-            cfg = yaml.safe_load(args.cfg.read_text())
-            for k, v in cfg.items():
+        # --cfg is type=str; always normalize to Path
+        cfg_path = Path(args.cfg) if args.cfg is not None else None
+        args.cfg = cfg_path
+        if cfg_path is not None and cfg_path.exists() and not args.fresh:
+            logger.warning(f"Loading config from {cfg_path}")
+            loaded = yaml.safe_load(cfg_path.read_text()) or {}
+            for k, v in loaded.items():
                 if isinstance(getattr(args, k, Default(None)), Default):
                     setattr(args, k, v)
         d = vars(args)
@@ -306,6 +309,11 @@ class Slideshow(ABC):
                     logger.warning(f"Failed to fetch urls")
 
     def launch(self):
+        import os
+        # Skip browser open in Docker / headless environments
+        if os.environ.get("GPSS_NO_BROWSER") or os.environ.get("DOCKER") or Path("/.dockerenv").exists():
+            logger.info("Skipping browser launch (container / headless mode)")
+            return
         p = platform.platform()
         s = self.server_url.replace("0.0.0.0", "localhost")
         if "Windows" in p:
@@ -316,7 +324,10 @@ class Slideshow(ABC):
             cmd = ["open", s]
         else:
             return
-        subprocess.Popen(cmd, shell=True)
+        try:
+            subprocess.Popen(cmd, shell=True)
+        except Exception as e:
+            logger.debug(f"Could not open browser: {e}")
 
     async def serve_index(self, request):
         """Serve the index.html file."""
@@ -849,11 +860,20 @@ class GooglePhotosSlideshow(RegexSlideshow):
 
     @classmethod
     def main(cls):
+        import os
+        import sys
         d, cfg = cls.get_args()
         d['cfg'] = cfg  # so instance can write back
 
         has_albums = bool(d.get('albums')) or bool(d.get('urls')) or bool(d.get('url'))
-        if not has_albums:
+        in_container = (
+            os.environ.get("GPSS_NO_BROWSER")
+            or os.environ.get("DOCKER")
+            or Path("/.dockerenv").exists()
+            or not sys.stdin.isatty()
+        )
+
+        if not has_albums and not in_container:
             print("""
     👋 Welcome to \033[1;33mGoogle Photos Slideshow\033[0m (multi-album)
          \033[3m(not sponsored by Google)\033[0m
@@ -881,6 +901,8 @@ class GooglePhotosSlideshow(RegexSlideshow):
                 d['url'] = m
             print("")
             print("After start, open http://localhost/admin to add more albums.")
+        elif not has_albums and in_container:
+            print("No albums configured yet. Open the Admin portal at /admin to add shared album URLs.")
         cls.save_cfg(d, cfg)
         s = cls(**d)
         s.serve()
@@ -889,9 +911,16 @@ class GooglePhotosSlideshow(RegexSlideshow):
 
 def main(mode=None, support_tk=True):
     import sys
+    import os
 
-    # if no arguments are passed, use the tkinter input
-    if support_tk:
+    # if no arguments are passed, use the tkinter input (desktop only)
+    in_container = (
+        os.environ.get("GPSS_NO_BROWSER")
+        or os.environ.get("DOCKER")
+        or Path("/.dockerenv").exists()
+        or not sys.stdin.isatty()
+    )
+    if support_tk and not in_container:
         if not sys.argv[1:]:
             global input
             input = tkinput
@@ -899,12 +928,22 @@ def main(mode=None, support_tk=True):
             sys.argv.remove("--cli")
     if mode is None:
         cfg = default_cfg
+        # Prefer explicit config path from env (Docker)
+        env_cfg = os.environ.get("GPSS_CONFIG")
+        if env_cfg:
+            cfg = Path(env_cfg)
         if cfg.exists():
-            mode = yaml.safe_load(cfg.read_text()).get('mode', None)
+            try:
+                mode = yaml.safe_load(cfg.read_text()).get('mode', None)
+            except Exception:
+                mode = None
     if mode is None:
-        mode = input("Enter the mode to use (base, urls, folder, regex, google_photos): [google_photos]").strip()
-        if not mode:
+        if in_container:
             mode = "google_photos"
+        else:
+            mode = input("Enter the mode to use (base, urls, folder, regex, google_photos): [google_photos]").strip()
+            if not mode:
+                mode = "google_photos"
     if mode not in ["base", "urls", "folder", "regex", "google_photos"]:
         raise ValueError(f"Invalid mode: {mode}")
     classes = [Slideshow, GooglePhotosSlideshow, URLListSlideshow, FolderSlideshow, RegexSlideshow]
