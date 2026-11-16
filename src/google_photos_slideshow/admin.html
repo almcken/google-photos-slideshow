@@ -255,6 +255,28 @@
         </div>
 
         <div class="card">
+            <h2><i class="fas fa-tachometer-alt"></i> Default speed</h2>
+            <p class="desc">Applies to all viewers and is remembered across restarts. 1x = 4 seconds per photo.</p>
+            <div class="form-row" style="align-items:center;">
+                <label for="speedSelect" style="color:var(--muted); font-size:0.9rem;">Speed</label>
+                <select id="speedSelect" style="padding:0.65rem 1rem; border-radius:8px; border:1px solid var(--border); background:#121212; color:var(--text); font-size:0.95rem; min-width:9rem;">
+                    <option value="0.25">0.25x (16s)</option>
+                    <option value="0.5">0.5x (8s)</option>
+                    <option value="1" selected>1x (4s)</option>
+                    <option value="2">2x (2s)</option>
+                    <option value="4">4x (1s)</option>
+                </select>
+                <button type="button" class="btn btn-primary" id="saveSpeedBtn"><i class="fas fa-save"></i> Save speed</button>
+            </div>
+            <p class="desc" style="margin-top:1rem; margin-bottom:0;">
+                <strong style="color:var(--text);">Fullscreen / kiosk links</strong><br>
+                Slideshow: <code id="linkNormal" style="color:var(--accent);">/</code><br>
+                Auto fullscreen: <code id="linkFs" style="color:var(--accent);">/?fullscreen=1</code><br>
+                Kiosk (fullscreen + hide controls): <code id="linkKiosk" style="color:var(--accent);">/?kiosk=1</code>
+            </p>
+        </div>
+
+        <div class="card">
             <h2><i class="fas fa-plus-circle"></i> Add album</h2>
             <p class="desc">Paste a public / shared Google Photos album URL. You can add as many as you like.</p>
             <form id="addForm" class="form-row">
@@ -330,6 +352,17 @@
                 .replace(/"/g, '&quot;');
         }
 
+        function nearestSpeedOption(speed) {
+            const options = [0.25, 0.5, 1, 2, 4];
+            let best = options[0];
+            let bestDiff = Math.abs(speed - best);
+            for (const o of options) {
+                const d = Math.abs(speed - o);
+                if (d < bestDiff) { best = o; bestDiff = d; }
+            }
+            return String(best);
+        }
+
         async function load() {
             try {
                 const data = await api('/api/albums');
@@ -337,10 +370,34 @@
                 document.getElementById('statAlbums').textContent = (data.albums || []).length;
                 document.getElementById('statPhotos').textContent = data.photo_count ?? '–';
                 document.getElementById('statStatus').textContent = data.running ? 'Running' : 'Idle';
+                if (data.speed != null) {
+                    document.getElementById('speedSelect').value = nearestSpeedOption(Number(data.speed));
+                }
             } catch (e) {
                 toast(e.message, true);
             }
         }
+
+        // Show absolute links for this host
+        (function fillLinks() {
+            const base = window.location.origin;
+            document.getElementById('linkNormal').textContent = base + '/';
+            document.getElementById('linkFs').textContent = base + '/?fullscreen=1';
+            document.getElementById('linkKiosk').textContent = base + '/?kiosk=1';
+        })();
+
+        document.getElementById('saveSpeedBtn').addEventListener('click', async () => {
+            const speed = parseFloat(document.getElementById('speedSelect').value);
+            try {
+                await api('/api/settings', {
+                    method: 'POST',
+                    body: JSON.stringify({ speed })
+                });
+                toast(`Default speed set to ${speed}x`);
+            } catch (err) {
+                toast(err.message, true);
+            }
+        });
 
         document.getElementById('addForm').addEventListener('submit', async (e) => {
             e.preventDefault();
