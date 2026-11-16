@@ -352,9 +352,8 @@ class Slideshow(ABC):
 
         s = self.server_url.replace("0.0.0.0", "localhost")
         logger.warning(f"Open your browser and go to {s} if you are on this computer")
-
+        logger.warning(f"Admin portal (add/remove albums): {s}/admin")
         logger.warning(f"Or go to {self.server_ip_url} from another device on the same network (may or may not work depending on your firewall settings)")
-
         logger.warning(f"Ctrl + C to stop the server (or close the terminal)")
 
     async def run_servers(self):
@@ -609,10 +608,15 @@ class RegexSlideshow(Slideshow):
 
 
 class GooglePhotosSlideshow(RegexSlideshow):
+    """Live slideshow that supports one or many Google Photos shared albums.
+
+    Photos from all configured albums are pooled and cycled. An admin UI at
+    /admin lets you add/remove albums while the slideshow is running.
+    """
     mode = "google_photos"
     default_regex = r'https:\/\/lh3\.googleusercontent\.com\/pw\/[a-zA-Z0-9_\-\/]+'
 
-    def __init__(self, url,
+    def __init__(self, url=None, urls=None, albums=None,
                  regex=default_regex,
                  title=Slideshow.default_title,
                  parse_title=RegexSlideshow.default_parse_title,
@@ -628,7 +632,28 @@ class GooglePhotosSlideshow(RegexSlideshow):
                  static_folders=Slideshow.default_static_folders,
                  **extra
                  ):
-        super().__init__(url, regex,
+        # Normalize to a list of album dicts: {id, url, name, enabled}
+        self.albums = []
+        self._force_refresh = False
+        self._cfg_path = extra.get('cfg') or default_cfg
+
+        if albums:
+            for a in albums:
+                self._add_album_internal(
+                    a.get('url') if isinstance(a, dict) else a,
+                    name=a.get('name') if isinstance(a, dict) else None,
+                    album_id=a.get('id') if isinstance(a, dict) else None,
+                    enabled=a.get('enabled', True) if isinstance(a, dict) else True,
+                )
+        if urls:
+            for u in urls:
+                self._add_album_internal(u)
+        if url:
+            self._add_album_internal(url)
+
+        # Keep a single primary url for parent class / config compat
+        primary = self.albums[0]['url'] if self.albums else (url or '')
+        super().__init__(primary, regex,
                          title=title, parse_title=parse_title, title_regex=title_regex,
                          image_duration=image_duration, refresh_interval=refresh_interval,
                          host=host, websocket_port=websocket_port, port=port,
@@ -636,49 +661,227 @@ class GooglePhotosSlideshow(RegexSlideshow):
                          static_folder=static_folder,
                          static_route=static_route,
                          static_folders=static_folders)
+        # Override source string for clients
+        self.source = self._source_label()
+        # Persist current album list so restarts keep multi-album setup
+        if self.albums:
+            self._save_albums_to_cfg()
+
+    def _source_label(self):
+        n = len([a for a in self.albums if a.get('enabled', True)])
+        if n == 0:
+            return "No albums configured"
+        if n == 1:
+            return self.albums[0]['url']
+        return f"{n} Google Photos albums"
+
+    def _add_album_internal(self, url, name=None, album_id=None, enabled=True):
+        if not url:
+            return None
+        url = url.strip().replace('"', '').replace("'", '')
+        if not url.startswith('http'):
+            url = 'https://' + url
+        # de-dupe by url
+        for a in self.albums:
+            if a['url'] == url:
+                return a
+        import uuid
+        album = {
+            'id': album_id or str(uuid.uuid4())[:8],
+            'url': url,
+            'name': name or 'Album',
+            'enabled': enabled,
+            'photo_count': None,
+        }
+        self.albums.append(album)
+        return album
+
+    def _save_albums_to_cfg(self):
+        """Persist albums list into the yaml config while preserving other keys."""
+        try:
+            cfg_path = Path(self._cfg_path) if self._cfg_path else default_cfg
+            data = {}
+            if cfg_path.exists():
+                data = yaml.safe_load(cfg_path.read_text()) or {}
+            data['mode'] = self.mode
+            data['albums'] = [
+                {'id': a['id'], 'url': a['url'], 'name': a['name'], 'enabled': a.get('enabled', True)}
+                for a in self.albums
+            ]
+            # keep a primary url for older tools
+            if self.albums:
+                data['url'] = self.albums[0]['url']
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cfg_path, 'w') as f:
+                yaml.dump(data, f, default_flow_style=False)
+            logger.info(f"Saved {len(self.albums)} albums to {cfg_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save config: {e}")
+
+    async def _fetch_urls(self):
+        """Fetch image urls from every enabled album and return the combined list."""
+        all_urls = []
+        async with aiohttp.ClientSession() as session:
+            for album in self.albums:
+                if not album.get('enabled', True):
+                    continue
+                try:
+                    async with session.get(album['url']) as response:
+                        if response.status == 404:
+                            logger.warning(f"404 for album {album.get('name')}: {album['url']}")
+                            continue
+                        text = await response.text()
+                        if self.parse_title and len(self.albums) == 1:
+                            title = re.search(self.title_regex, text)
+                            if title:
+                                title = title.group(1)
+                                if title != self.title:
+                                    logger.info(f"New Title: {title}")
+                                    self.title = title
+                                    await self._send_to_all(json.dumps({'action': 'title', 'title': self.title}))
+                        found = list(set(re.findall(self.regex, text)))
+                        album['photo_count'] = len(found)
+                        all_urls.extend(found)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch album {album.get('name')}: {e}")
+        # unique while preserving order of first appearance
+        seen = set()
+        unique = []
+        for u in all_urls:
+            if u not in seen:
+                seen.add(u)
+                unique.append(u)
+        return unique
+
+    # ---- Admin HTTP handlers ----
+    async def serve_admin(self, request):
+        admin_path = Path(__file__).parent / 'admin.html'
+        return web.FileResponse(admin_path)
+
+    async def api_list_albums(self, request):
+        return web.json_response({
+            'albums': self.albums,
+            'photo_count': len(self.urls),
+            'running': True,
+            'title': self.title,
+        })
+
+    async def api_add_album(self, request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({'error': 'Invalid JSON'}, status=400)
+        url = (body.get('url') or '').strip()
+        name = (body.get('name') or '').strip() or None
+        if not url:
+            return web.json_response({'error': 'url is required'}, status=400)
+        if 'photos.google.com' not in url and 'googleusercontent.com' not in url:
+            # soft warning only – still allow
+            pass
+        album = self._add_album_internal(url, name=name)
+        if album is None:
+            return web.json_response({'error': 'Could not add album'}, status=400)
+        self.source = self._source_label()
+        self._save_albums_to_cfg()
+        self._force_refresh = True
+        await self._send_to_all(json.dumps({'action': 'source', 'source': self.source}))
+        return web.json_response({'ok': True, 'album': album})
+
+    async def api_remove_album(self, request):
+        album_id = request.match_info.get('id')
+        before = len(self.albums)
+        self.albums = [a for a in self.albums if a['id'] != album_id]
+        if len(self.albums) == before:
+            return web.json_response({'error': 'Album not found'}, status=404)
+        self.source = self._source_label()
+        self._save_albums_to_cfg()
+        self._force_refresh = True
+        await self._send_to_all(json.dumps({'action': 'source', 'source': self.source}))
+        return web.json_response({'ok': True})
+
+    async def api_refresh(self, request):
+        self._force_refresh = True
+        return web.json_response({'ok': True})
+
+    def setup_routes(self, app):
+        super().setup_routes(app)
+        app.router.add_get('/admin', self.serve_admin)
+        app.router.add_get('/admin/', self.serve_admin)
+        app.router.add_get('/api/albums', self.api_list_albums)
+        app.router.add_post('/api/albums', self.api_add_album)
+        app.router.add_delete('/api/albums/{id}', self.api_remove_album)
+        app.router.add_post('/api/refresh', self.api_refresh)
+
+    async def run(self):
+        """Override run to honor force-refresh from admin and multi-album fetch."""
+        urls = await self._fetch_urls()
+        await self._record_urls(urls)
+        self.launch()
+        while True:
+            logger.debug(f"updating clients: {self.current_index}/{len(self.urls)}")
+            await self._update_clients()
+            await asyncio.sleep(0.1)
+            if self._force_refresh or (time.time() - self.last_refresh) > self.refresh_interval:
+                self._force_refresh = False
+                try:
+                    urls = await self._fetch_urls()
+                    await self._record_urls(urls)
+                except Exception:
+                    logger.warning("Failed to fetch urls")
 
     @classmethod
     def arg_parser(cls):
         parser = Slideshow.arg_parser()
-        parser.add_argument("--url", help="The photos album link", type=str, default=Default(None))
+        parser.add_argument("--url", help="A single photos album link (legacy)", type=str, default=Default(None))
+        parser.add_argument("--urls", nargs="*", help="One or more Google Photos shared album links", default=Default(None))
         parser.add_argument("--regex", help="The regex to extract the image urls from the google photos album link", type=str, default=Default(GooglePhotosSlideshow.default_regex))
         return parser
 
     @classmethod
+    def get_args(cls):
+        d, cfg = super().get_args()
+        # Load albums from config if present
+        if cfg is not None and Path(cfg).exists() and not d.get('fresh'):
+            raw = yaml.safe_load(Path(cfg).read_text()) or {}
+            if 'albums' in raw and raw['albums']:
+                d['albums'] = raw['albums']
+        return d, cfg
+
+    @classmethod
     def main(cls):
         d, cfg = cls.get_args()
-        if d.get('url', None) is None:
+        d['cfg'] = cfg  # so instance can write back
+
+        has_albums = bool(d.get('albums')) or bool(d.get('urls')) or bool(d.get('url'))
+        if not has_albums:
             print("""
-    👋 Welcome to \033[1;33mGoogle Photos Slideshow\033[0m
+    👋 Welcome to \033[1;33mGoogle Photos Slideshow\033[0m (multi-album)
          \033[3m(not sponsored by Google)\033[0m
 
     📜 \033[1;34mInstructions:\033[0m
-        1️⃣ Get a shareable link to a \033[1;36mGoogle Photos\033[0m album 📸.
-            - Open \033[1;36mGoogle Photos\033[0m in your browser 🌐: https://photos.google.com/albums
-            - Open the photo album 📖 you want to display and click on it 👆.
-            - Copy the \033[1;32mURL\033[0m 🔗 from the address bar 📋.
-        2️⃣ 📋 Paste the \033[1;32mURL\033[0m 🔗 below to start the slideshow ✏️.
-            - http://localhost will open and you can cast it to your 📺 TV.
-        3️⃣ Share the album with attendees 🤝, and they can add 📸 photos as the slideshow runs.
-        4️⃣ 🎉 Enjoy your slideshow! 🎥
-        
+        1️⃣ Get shareable links to one or more \033[1;36mGoogle Photos\033[0m albums 📸.
+            - Open \033[1;36mGoogle Photos\033[0m: https://photos.google.com/albums
+            - Open an album → Share → create / copy the link (must include key=).
+        2️⃣ Paste the first album URL below (you can add more later via the Admin portal).
+        3️⃣ Open http://localhost/admin to manage albums while the slideshow runs.
+        4️⃣ Cast http://localhost to your TV and enjoy 🎉
+
     \033[3mWhen done, press \033[1;31mCtrl + C\033[0m\033[3m to stop\033[0m 🛑.
     """)
-
-            m = input(f'📋🔗 Enter the google photos album link you copied (or Enter ⏎ to go there 🌐↗️): ')
+            m = input('📋🔗 Enter a Google Photos album link (or Enter to open albums page): ')
             mtest = m.strip().lower()
             if mtest == "o" or not mtest:
                 import webbrowser
                 webbrowser.open("https://photos.google.com/albums")
-                m = input(f'📋🔗 Enter the google photos album link you copied: ')
+                m = input('📋🔗 Enter the google photos album link you copied: ')
             m = m.strip().replace('"', '').replace("'", '')
-            if not m.startswith("http"):
+            if m and not m.startswith("http"):
                 m = "https://" + m
-
+            if m:
+                d['url'] = m
             print("")
-            d['url'] = m
+            print("After start, open http://localhost/admin to add more albums.")
         cls.save_cfg(d, cfg)
-        # start the slideshow
         s = cls(**d)
         s.serve()
 
@@ -712,4 +915,4 @@ def main(mode=None, support_tk=True):
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
