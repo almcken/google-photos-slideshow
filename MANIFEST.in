@@ -1,1 +1,3 @@
 include src/google_photos_slideshow/index.html
+include src/google_photos_slideshow/admin.html
+include src/google_photos_slideshow/favicon.ico
