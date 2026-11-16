@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin – Google Photos Slideshow</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --bg: #0f0f0f;
+            --card: #1a1a1a;
+            --border: #2a2a2a;
+            --text: #e8e8e8;
+            --muted: #888;
+            --accent: #4a9eff;
+            --accent-hover: #3a8eef;
+            --danger: #ff5c5c;
+            --success: #4caf50;
+            --radius: 12px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        header {
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            padding: 1.25rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        header h1 {
+            font-size: 1.35rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+        header h1 i { color: var(--accent); }
+        .header-actions { display: flex; gap: 0.75rem; align-items: center; }
+        a.btn, button.btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.55rem 1rem;
+            border-radius: 8px;
+            border: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.15s, transform 0.1s;
+        }
+        a.btn:active, button.btn:active { transform: scale(0.97); }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover { background: #252525; }
+        .btn-danger { background: transparent; color: var(--danger); border: 1px solid #5a2a2a; }
+        .btn-danger:hover { background: #2a1515; }
+        main {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 4rem;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .card p.desc {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-bottom: 1.25rem;
+        }
+        .form-row {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        input[type="url"], input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+            padding: 0.7rem 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #121212;
+            color: var(--text);
+            font-size: 0.95rem;
+        }
+        input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.2);
+        }
+        .album-list { display: flex; flex-direction: column; gap: 0.75rem; }
+        .album-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.1rem;
+            background: #121212;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            transition: border-color 0.15s;
+        }
+        .album-item:hover { border-color: #3a3a3a; }
+        .album-info { flex: 1; min-width: 0; }
+        .album-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .album-url {
+            font-size: 0.8rem;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 0.15rem;
+        }
+        .album-meta {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 0.35rem;
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            background: #1e2a1e;
+            color: var(--success);
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+        .badge.inactive { background: #2a1e1e; color: #ff8a8a; }
+        .empty-state {
+            text-align: center;
+            padding: 2.5rem 1rem;
+            color: var(--muted);
+        }
+        .empty-state i { font-size: 2.5rem; margin-bottom: 0.75rem; opacity: 0.5; }
+        .toast {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            padding: 0.85rem 1.25rem;
+            border-radius: 10px;
+            background: #1e2a1e;
+            color: var(--success);
+            border: 1px solid #2e4a2e;
+            font-size: 0.9rem;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.25s, transform 0.25s;
+            pointer-events: none;
+            z-index: 100;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { background: #2a1e1e; color: var(--danger); border-color: #4a2a2a; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.1rem 1.25rem;
+        }
+        .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+        footer {
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.8rem;
+            padding: 1rem;
+        }
+        .help {
+            background: #151a22;
+            border: 1px solid #243044;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            font-size: 0.88rem;
+            color: #a8c0e0;
+            margin-bottom: 1.5rem;
+        }
+        .help strong { color: #c0d8f0; }
+        .help ol { margin: 0.5rem 0 0 1.2rem; }
+        .help li { margin: 0.25rem 0; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><i class="fas fa-images"></i> Slideshow Admin</h1>
+        <div class="header-actions">
+            <a class="btn btn-ghost" href="/" target="_blank"><i class="fas fa-play"></i> Open Slideshow</a>
+            <button class="btn btn-primary" id="refreshBtn"><i class="fas fa-sync-alt"></i> Force Refresh</button>
+        </div>
+    </header>
+
+    <main>
+        <div class="stats" id="stats">
+            <div class="stat">
+                <div class="stat-value" id="statAlbums">–</div>
+                <div class="stat-label">Albums</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="statPhotos">–</div>
+                <div class="stat-label">Photos loaded</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="statStatus">–</div>
+                <div class="stat-label">Status</div>
+            </div>
+        </div>
+
+        <div class="help">
+            <strong>How to add albums</strong>
+            <ol>
+                <li>Open <a href="https://photos.google.com/albums" target="_blank" style="color:var(--accent)">Google Photos → Albums</a></li>
+                <li>Open the album you want, then click <strong>Share</strong> → create a link (or copy the share URL that includes <code>?key=</code>)</li>
+                <li>Paste the full URL below and click Add. The slideshow will pull photos from all added albums and cycle through them.</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h2><i class="fas fa-plus-circle"></i> Add album</h2>
+            <p class="desc">Paste a public / shared Google Photos album URL. You can add as many as you like.</p>
+            <form id="addForm" class="form-row">
+                <input type="text" id="albumName" placeholder="Optional display name" maxlength="80">
+                <input type="url" id="albumUrl" placeholder="https://photos.google.com/share/..." required>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2><i class="fas fa-layer-group"></i> Configured albums</h2>
+            <p class="desc">Photos from all of these albums are combined and cycled. New photos appear automatically.</p>
+            <div class="album-list" id="albumList">
+                <div class="empty-state">
+                    <i class="fas fa-folder-open"></i>
+                    <div>No albums yet. Add your first shared album above.</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const toastEl = document.getElementById('toast');
+        function toast(msg, isError = false) {
+            toastEl.textContent = msg;
+            toastEl.className = 'toast show' + (isError ? ' error' : '');
+            setTimeout(() => toastEl.classList.remove('show'), 3200);
+        }
+
+        async function api(path, opts = {}) {
+            const res = await fetch(path, {
+                headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+                ...opts
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || res.statusText || 'Request failed');
+            return data;
+        }
+
+        function renderAlbums(albums) {
+            const list = document.getElementById('albumList');
+            if (!albums || albums.length === 0) {
+                list.innerHTML = `<div class="empty-state"><i class="fas fa-folder-open"></i><div>No albums yet. Add your first shared album above.</div></div>`;
+                return;
+            }
+            list.innerHTML = albums.map((a, i) => `
+                <div class="album-item" data-id="${a.id}">
+                    <div class="album-info">
+                        <div class="album-name">${escapeHtml(a.name || 'Untitled album')}</div>
+                        <div class="album-url" title="${escapeHtml(a.url)}">${escapeHtml(a.url)}</div>
+                        <div class="album-meta">
+                            <span class="badge ${a.enabled === false ? 'inactive' : ''}">
+                                <i class="fas fa-${a.enabled === false ? 'pause' : 'check'}"></i>
+                                ${a.enabled === false ? 'Disabled' : 'Active'}
+                            </span>
+                            ${a.photo_count != null ? `<span><i class="fas fa-image"></i> ${a.photo_count} photos</span>` : ''}
+                        </div>
+                    </div>
+                    <button class="btn btn-danger" onclick="removeAlbum('${a.id}')" title="Remove">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        async function load() {
+            try {
+                const data = await api('/api/albums');
+                renderAlbums(data.albums || []);
+                document.getElementById('statAlbums').textContent = (data.albums || []).length;
+                document.getElementById('statPhotos').textContent = data.photo_count ?? '–';
+                document.getElementById('statStatus').textContent = data.running ? 'Running' : 'Idle';
+            } catch (e) {
+                toast(e.message, true);
+            }
+        }
+
+        document.getElementById('addForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const url = document.getElementById('albumUrl').value.trim();
+            const name = document.getElementById('albumName').value.trim();
+            if (!url) return;
+            try {
+                await api('/api/albums', {
+                    method: 'POST',
+                    body: JSON.stringify({ url, name: name || undefined })
+                });
+                document.getElementById('albumUrl').value = '';
+                document.getElementById('albumName').value = '';
+                toast('Album added');
+                await load();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        });
+
+        async function removeAlbum(id) {
+            if (!confirm('Remove this album from the slideshow?')) return;
+            try {
+                await api(`/api/albums/${id}`, { method: 'DELETE' });
+                toast('Album removed');
+                await load();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', async () => {
+            try {
+                await api('/api/refresh', { method: 'POST' });
+                toast('Refresh triggered');
+                setTimeout(load, 1500);
+            } catch (err) {
+                toast(err.message, true);
+            }
+        });
+
+        load();
+        setInterval(load, 15000);
+    </script>
+</body>
+</html>
