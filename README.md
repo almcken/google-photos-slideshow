@@ -3,7 +3,9 @@
 NOTE: this project is in no way affiliated with or sponsored by Google Photos.
 
 A **simple**, **live**, **communal** slideshow.
-* **auto-updates** as photos are added to the album
+* **auto-updates** as photos are added to the album(s)
+* **multiple Google Photos albums** – add 2+ shared albums; the app cycles through all of them
+* **Admin portal** at `/admin` to add / remove albums while the slideshow is running
 * **live communal controls** at http://localhost
 * **fullscreen** mode
 * easy to **cast** fullscreen to a Chromecast and still control from your phone or computer
@@ -23,8 +25,10 @@ pip install google-photos-slideshow
 ```commandline
 gpss
 ```
-* The first time you run this, it will prompt you for the public url to your google photos album.
-* Future runs will use the same album unless you specify a different one using `--url` or use `gpss --fresh` to get the prompt again.
+* The first time you run this, it will prompt you for a public/shareable Google Photos album URL.
+* After it starts, open **http://localhost/admin** to add more albums, remove albums, or force a refresh.
+* Photos from every enabled album are pooled and the slideshow cycles through them (new photos appear automatically).
+* Future runs remember your album list. Use `gpss --fresh` to start over, or pass albums with `gpss --urls URL1 URL2`.
 * See `gpss --help` for more options.
 
 ```
@@ -79,7 +83,9 @@ folder-slideshow /path/to/folder
     * [ ] spotify?
 #### Support for multiple photo sources
   * [x] Google Photos
-    * [x] Public link only
+    * [x] Public / shared link only
+    * [x] Multiple shared albums at once (pooled + cycled)
+    * [x] Admin portal (`/admin`) to add/remove albums live
     * [ ] Maybe add support for authenticated access?
   * [x] Local Folder
   * [x] Generic list of URLs (or file containing one URL per line)
@@ -90,7 +96,8 @@ folder-slideshow /path/to/folder
   * [ ] Facebook
 #### Switching photo sources
   * [x] switch to generic config.yaml
-  * [ ] Change photo source live from UI
+  * [x] Change albums live from Admin UI
+  * [ ] Change photo source live from main slideshow UI
 #### Photo order
   * [x] Random
   * [x] New loads first if added during slideshow
