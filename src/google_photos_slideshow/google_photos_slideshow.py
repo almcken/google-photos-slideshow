@@ -104,10 +104,21 @@ class Slideshow(ABC):
             if not isinstance(loaded, dict):
                 loaded = {}
             for k, v in loaded.items():
-                if k == 'cfg':
+                if k in ('cfg',):
                     continue
                 if isinstance(getattr(args, k, Default(None)), Default):
                     setattr(args, k, v)
+            # Prefer explicit speed from config when image_duration was left as default
+            if 'speed' in loaded and loaded['speed'] and isinstance(getattr(args, 'image_duration', Default(None)), Default):
+                try:
+                    args.image_duration = 4.0 / float(loaded['speed'])
+                except Exception:
+                    pass
+            elif 'speed' in loaded and loaded['speed'] and 'image_duration' not in loaded:
+                try:
+                    args.image_duration = 4.0 / float(loaded['speed'])
+                except Exception:
+                    pass
         d = vars(args)
         d = {k: v for k, v in d.items() if (not isinstance(v, Default)) and k != 'mode'}
 
@@ -171,8 +182,9 @@ class Slideshow(ABC):
         self.clients = set()
         self.paused = False
         self.last_refresh = time.time()
-        self.speed = 1
-        self.image_duration = image_duration  # Time in seconds for each image
+        # speed is a multiplier: duration = 4 / speed  (1x → 4s per image)
+        self.image_duration = float(image_duration) if image_duration else 4.0
+        self.speed = round(4.0 / self.image_duration, 4) if self.image_duration else 1.0
         self.title = title
         self.support_casting = support_casting
 
@@ -300,11 +312,21 @@ class Slideshow(ABC):
                         logger.warning("play")
                         await self._send_to_all(json.dumps({'action': 'play'}))
                 elif data['action'] == 'speed':
-                    if self.speed != float(data['value']):
-                        self.image_duration = 4/float(data['value'])
-                        self.speed = float(data['value'])
+                    new_speed = float(data['value'])
+                    if self.speed != new_speed:
+                        self.speed = new_speed
+                        self.image_duration = 4.0 / new_speed if new_speed else 4.0
                         logger.warning(f"speed changed to {self.speed} ({self.image_duration}s)")
                         await self._send_to_all(json.dumps({'action': 'speed', 'speed': self.speed}))
+                        # Persist as default for next restart
+                        if hasattr(self, '_save_albums_to_cfg'):
+                            self._save_albums_to_cfg()
+                        elif hasattr(self, '_cfg_path') and self._cfg_path:
+                            self.__class__.save_cfg({
+                                'speed': self.speed,
+                                'image_duration': self.image_duration,
+                                'title': self.title,
+                            }, self._cfg_path)
         finally:
             await self._unregister(websocket)
         await asyncio.sleep(0.1)
@@ -739,6 +761,10 @@ class GooglePhotosSlideshow(RegexSlideshow):
             # Drop non-serializable / internal keys if they leaked in
             data.pop('cfg', None)
             data['mode'] = self.mode
+            data['speed'] = self.speed
+            data['image_duration'] = self.image_duration
+            if self.title:
+                data['title'] = self.title
             data['albums'] = [
                 {'id': a['id'], 'url': a['url'], 'name': a['name'], 'enabled': a.get('enabled', True)}
                 for a in self.albums
@@ -799,6 +825,8 @@ class GooglePhotosSlideshow(RegexSlideshow):
             'photo_count': len(self.urls),
             'running': True,
             'title': self.title,
+            'speed': self.speed,
+            'image_duration': self.image_duration,
         })
 
     async def api_add_album(self, request):
@@ -838,6 +866,62 @@ class GooglePhotosSlideshow(RegexSlideshow):
         self._force_refresh = True
         return web.json_response({'ok': True})
 
+    async def api_get_settings(self, request):
+        return web.json_response({
+            'speed': self.speed,
+            'image_duration': self.image_duration,
+            'title': self.title,
+            'refresh_interval': self.refresh_interval,
+            'photo_count': len(self.urls),
+            'album_count': len([a for a in self.albums if a.get('enabled', True)]),
+        })
+
+    async def api_update_settings(self, request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({'error': 'Invalid JSON'}, status=400)
+
+        changed = False
+        if 'speed' in body and body['speed'] is not None:
+            try:
+                new_speed = float(body['speed'])
+                if new_speed <= 0:
+                    return web.json_response({'error': 'speed must be > 0'}, status=400)
+                if new_speed != self.speed:
+                    self.speed = new_speed
+                    self.image_duration = 4.0 / new_speed
+                    changed = True
+            except (TypeError, ValueError):
+                return web.json_response({'error': 'invalid speed'}, status=400)
+
+        if 'image_duration' in body and body['image_duration'] is not None and 'speed' not in body:
+            try:
+                dur = float(body['image_duration'])
+                if dur <= 0:
+                    return web.json_response({'error': 'image_duration must be > 0'}, status=400)
+                self.image_duration = dur
+                self.speed = round(4.0 / dur, 4)
+                changed = True
+            except (TypeError, ValueError):
+                return web.json_response({'error': 'invalid image_duration'}, status=400)
+
+        if 'title' in body and body['title'] is not None:
+            self.title = str(body['title'])
+            changed = True
+            await self._send_to_all(json.dumps({'action': 'title', 'title': self.title}))
+
+        if changed:
+            self._save_albums_to_cfg()
+            await self._send_to_all(json.dumps({'action': 'speed', 'speed': self.speed}))
+
+        return web.json_response({
+            'ok': True,
+            'speed': self.speed,
+            'image_duration': self.image_duration,
+            'title': self.title,
+        })
+
     def setup_routes(self, app):
         super().setup_routes(app)
         app.router.add_get('/admin', self.serve_admin)
@@ -846,6 +930,8 @@ class GooglePhotosSlideshow(RegexSlideshow):
         app.router.add_post('/api/albums', self.api_add_album)
         app.router.add_delete('/api/albums/{id}', self.api_remove_album)
         app.router.add_post('/api/refresh', self.api_refresh)
+        app.router.add_get('/api/settings', self.api_get_settings)
+        app.router.add_post('/api/settings', self.api_update_settings)
 
     async def run(self):
         """Override run to honor force-refresh from admin and multi-album fetch."""
