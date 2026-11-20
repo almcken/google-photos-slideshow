@@ -241,7 +241,7 @@ function initializeCastApi() {
                 this.speedSelectEl = document.getElementById('speed-select');
                 this.speedDropdownEl = document.getElementById('speed-dropdown');
                 this.slideshowEl = document.getElementById('slideshow');
-                this.sourceEl = document.getElementById('source');
+                //this.sourceEl = document.getElementById('source');
                 this.containerEl = document.getElementById('container');
                 this.fullscreenToggleEl = document.getElementById('fullscreen-toggle');
                 this.castButtonEl = document.getElementById('castButton');
@@ -291,9 +291,9 @@ function initializeCastApi() {
                     this.play(false);
                 } else if (data.action === 'title') {
                     document.title = data.title;
-                    this.sourceEl.innerHTML = data.title;
+                    //this.sourceEl.innerHTML = data.title;
                 } else if (data.action === 'source'){
-                    this.sourceEl.href = data.source;
+                    //this.sourceEl.href = data.source;
                 }else{
                     this.setUrl(data.url, data['content-type']);
                 }
